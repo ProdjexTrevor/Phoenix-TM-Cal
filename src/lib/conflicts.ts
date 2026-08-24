@@ -14,8 +14,20 @@ export type SchoolLevelFilter = {
 
 export type SchoolLevelsMap = Record<string, SchoolLevelFilter>;
 
+export type IdleTeamLevel = {
+  schoolId: string;
+  shortName: string;
+  level: "V" | "JV";
+  primary: string;
+  isKid: boolean;
+};
+
 export function dateKey(d: Date) {
   return format(d, "yyyy-MM-dd");
+}
+
+export function playingKey(schoolId: string, level: GameLevel) {
+  return `${schoolId}:${level === "JV" ? "JV" : "V"}`;
 }
 
 export function isSchoolActive(filter: SchoolLevelFilter | undefined) {
@@ -77,33 +89,66 @@ export function conflictsWithKid(
   );
 }
 
-/** Schools (from the watch list) with no games that day at their selected levels. */
-export function schoolsIdleOnDay(
+/**
+ * Selected school+level combos with no game that day.
+ * Example: Liberty North V playing, JV not → lists "Liberty North JV".
+ */
+export function teamsIdleOnDay(
   dayKey: string,
-  watchSchoolIds: string[],
   schools: School[],
-  playingByDate: Map<string, Set<string>>
-): School[] {
+  schoolLevels: SchoolLevelsMap,
+  playingByDate: Map<string, Set<string>>,
+  kidSchoolId: string | null,
+  kidLevels: GameLevel[]
+): IdleTeamLevel[] {
   const playing = playingByDate.get(dayKey) ?? new Set();
-  return schools.filter(
-    (s) => watchSchoolIds.includes(s.id) && !playing.has(s.id)
-  );
+  const idle: IdleTeamLevel[] = [];
+  const kidLevelSet = new Set(kidLevels);
+
+  for (const school of schools) {
+    const filter = schoolLevels[school.id];
+    if (!isSchoolActive(filter)) continue;
+
+    const candidates: Array<{ level: GameLevel; label: "V" | "JV" }> = [];
+    if (filter.varsity) candidates.push({ level: "Varsity", label: "V" });
+    if (filter.jv) candidates.push({ level: "JV", label: "JV" });
+
+    for (const c of candidates) {
+      const key = playingKey(school.id, c.level);
+      if (playing.has(key)) continue;
+      idle.push({
+        schoolId: school.id,
+        shortName: school.shortName,
+        level: c.label,
+        primary: school.primary,
+        isKid:
+          school.id === kidSchoolId && kidLevelSet.has(c.level),
+      });
+    }
+  }
+
+  return idle;
 }
 
+/** Map date → set of "schoolId:V" / "schoolId:JV" that have a game. */
 export function buildPlayingByDate(
   events: CalendarEvent[],
   schoolLevels: SchoolLevelsMap
 ): Map<string, Set<string>> {
   const map = new Map<string, Set<string>>();
   for (const event of events) {
-    if (!schoolAllowsLevel(schoolLevels[event.resource.schoolId], event.resource.level)) {
+    if (
+      !schoolAllowsLevel(
+        schoolLevels[event.resource.schoolId],
+        event.resource.level
+      )
+    ) {
       continue;
     }
     const key = dateKey(event.start);
     const set = map.get(key) ?? new Set();
-    set.add(event.resource.schoolId);
+    set.add(playingKey(event.resource.schoolId, event.resource.level));
     map.set(key, set);
   }
   return map;
 }
-

@@ -1,4 +1,10 @@
-import { useMemo, useState, useCallback, type CSSProperties } from "react";
+import {
+  useMemo,
+  useState,
+  useCallback,
+  useEffect,
+  type CSSProperties,
+} from "react";
 import {
   Calendar,
   dateFnsLocalizer,
@@ -22,11 +28,21 @@ import {
   contrastText,
   gameLocationLabel,
 } from "./lib/events";
-import { buildKidBusyMap, conflictsWithKid, buildPlayingByDate, isSchoolActive, schoolAllowsLevel, type SchoolLevelsMap } from "./lib/conflicts";
+import {
+  buildKidBusyMap,
+  conflictsWithKid,
+  buildPlayingByDate,
+  isSchoolActive,
+  schoolAllowsLevel,
+  type SchoolLevelsMap,
+} from "./lib/conflicts";
 import { buildIcs, downloadIcs, googleEventUrl } from "./lib/ics";
 import { WeekGamesView, DayGamesView } from "./components/GamesOnlyView";
+import { FilterSidebar } from "./components/FilterSidebar";
+import { MobileNav, type MobileTab } from "./components/MobileNav";
 import { MatchupLabel } from "./components/MatchupLabel";
 import { ParentWatchProvider } from "./components/ParentWatchContext";
+import { MOBILE_QUERY, useMediaQuery } from "./hooks/useMediaQuery";
 import "./App.css";
 
 const data = schedule as ScheduleData;
@@ -42,6 +58,17 @@ const localizer = dateFnsLocalizer({
 });
 
 const ALL_SCHOOL_IDS = data.schools.map((s) => s.id);
+const STORAGE_KEY = "phoenix-big-dawgs-filters";
+
+type StoredFilters = {
+  schoolLevels?: SchoolLevelsMap;
+  kidSchoolId?: string | null;
+  kidVarsity?: boolean;
+  kidJv?: boolean;
+  openTimesOnly?: boolean;
+  view?: View;
+  date?: string;
+};
 
 function defaultSchoolLevels(both = true): SchoolLevelsMap {
   return Object.fromEntries(
@@ -49,17 +76,75 @@ function defaultSchoolLevels(both = true): SchoolLevelsMap {
   );
 }
 
+function loadStored(): StoredFilters {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as StoredFilters;
+  } catch {
+    return {};
+  }
+}
+
+function mergeSchoolLevels(stored?: SchoolLevelsMap): SchoolLevelsMap {
+  const base = defaultSchoolLevels(true);
+  if (!stored) return base;
+  for (const id of ALL_SCHOOL_IDS) {
+    if (stored[id]) {
+      base[id] = {
+        varsity: Boolean(stored[id].varsity),
+        jv: Boolean(stored[id].jv),
+      };
+    }
+  }
+  return base;
+}
+
 function App() {
+  const stored = useMemo(() => loadStored(), []);
+
   const [schoolLevels, setSchoolLevels] = useState<SchoolLevelsMap>(() =>
-    defaultSchoolLevels(true)
+    mergeSchoolLevels(stored.schoolLevels)
   );
-  const [kidSchoolId, setKidSchoolId] = useState<string | null>(null);
-  const [kidVarsity, setKidVarsity] = useState(true);
-  const [kidJv, setKidJv] = useState(true);
-  const [openTimesOnly, setOpenTimesOnly] = useState(false);
-  const [view, setView] = useState<View>("month");
-  const [date, setDate] = useState(() => parseISO("2026-08-24"));
+  const [kidSchoolId, setKidSchoolId] = useState<string | null>(
+    () => stored.kidSchoolId ?? null
+  );
+  const [kidVarsity, setKidVarsity] = useState(() => stored.kidVarsity ?? true);
+  const [kidJv, setKidJv] = useState(() => stored.kidJv ?? true);
+  const [openTimesOnly, setOpenTimesOnly] = useState(
+    () => stored.openTimesOnly ?? false
+  );
+  const [view, setView] = useState<View>(() => stored.view ?? "month");
+  const [date, setDate] = useState(() =>
+    stored.date ? parseISO(stored.date) : parseISO("2026-08-24")
+  );
   const [selected, setSelected] = useState<CalendarEvent | null>(null);
+  const isMobile = useMediaQuery(MOBILE_QUERY);
+  const [mobileTab, setMobileTab] = useState<MobileTab>("calendar");
+
+  const calendarView = isMobile && view === "month" ? "week" : view;
+
+  // Persist kid + school filters across view changes and reloads
+  useEffect(() => {
+    const payload: StoredFilters = {
+      schoolLevels,
+      kidSchoolId,
+      kidVarsity,
+      kidJv,
+      openTimesOnly,
+      view,
+      date: format(date, "yyyy-MM-dd"),
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  }, [
+    schoolLevels,
+    kidSchoolId,
+    kidVarsity,
+    kidJv,
+    openTimesOnly,
+    view,
+    date,
+  ]);
 
   const watchSchoolIds = useMemo(
     () => ALL_SCHOOL_IDS.filter((id) => isSchoolActive(schoolLevels[id])),
@@ -73,7 +158,6 @@ function App() {
     return levels;
   }, [kidVarsity, kidJv]);
 
-  /** All non-canceled games for busy-map / kid schedule (ignore school filter). */
   const allLevelEvents = useMemo(() => {
     const games = data.games.filter((g) => !g.canceled);
     return toCalendarEvents(games, schoolsById);
@@ -142,6 +226,17 @@ function App() {
     ]
   );
 
+  const agendaComponents = useMemo(
+    () => ({
+      agenda: {
+        event: ({ event }: { event: object }) => (
+          <MatchupLabel event={event as CalendarEvent} />
+        ),
+      },
+    }),
+    []
+  );
+
   const setSchoolLevel = (
     id: string,
     key: "varsity" | "jv",
@@ -155,9 +250,7 @@ function App() {
 
   const setAllLevels = (varsity: boolean, jv: boolean) => {
     setSchoolLevels(
-      Object.fromEntries(
-        ALL_SCHOOL_IDS.map((id) => [id, { varsity, jv }])
-      )
+      Object.fromEntries(ALL_SCHOOL_IDS.map((id) => [id, { varsity, jv }]))
     );
   };
 
@@ -194,231 +287,115 @@ function App() {
   const kidSchool = kidSchoolId ? schoolsById[kidSchoolId] : null;
   const openTimesReady = Boolean(kidSchoolId && kidLevels.length > 0);
 
+  const calendarViews = useMemo(
+    () =>
+      isMobile
+        ? ({
+            week: WeekGamesView,
+            day: DayGamesView,
+            agenda: true,
+          } as const)
+        : ({
+            month: true,
+            week: WeekGamesView,
+            day: DayGamesView,
+            agenda: true,
+          } as const),
+    [isMobile]
+  );
+
+  const kidSchoolLabel = kidSchool
+    ? `${kidSchool.shortName}${kidLevels.length === 1 ? ` ${kidLevels[0]}` : ""}`
+    : null;
+
+  const filtersActive = Boolean(kidSchoolId || openTimesOnly);
+
+  const showCalendar = !isMobile || mobileTab === "calendar";
+  const showFilters = !isMobile || mobileTab === "filters";
+
   return (
     <ParentWatchProvider value={parentWatchValue}>
-      <div className="app">
-        <header className="hero">
+      <div className={`app ${isMobile ? "is-mobile" : "is-desktop"}`}>
+        <header className={`hero ${isMobile ? "hero--compact" : ""}`}>
           <div className="hero__bg" aria-hidden />
           <div className="hero__content">
             <p className="eyebrow">Fall 2026 · MSHSAA</p>
             <h1>Phoenix - Big Dawgs</h1>
-            <div className="hero__rule" aria-hidden />
+            {!isMobile ? <div className="hero__rule" aria-hidden /> : null}
           </div>
+          {isMobile && showCalendar ? (
+            <button
+              type="button"
+              className="hero__filter-btn"
+              onClick={() => setMobileTab("filters")}
+              aria-label="Open filters"
+            >
+              Filters
+              {filtersActive ? (
+                <span className="hero__filter-dot" aria-hidden />
+              ) : null}
+            </button>
+          ) : null}
         </header>
 
-        <div className="layout">
-          <aside className="sidebar">
-            <section className="panel parent-panel">
-              <h2>My kid&apos;s team</h2>
-              <p className="panel-help">
-                Set your school team, then turn on open times to only see other
-                schools when your kid isn&apos;t playing.
-              </p>
-              <label className="field-label" htmlFor="kid-school">
-                School
-              </label>
-              <select
-                id="kid-school"
-                className="select"
-                value={kidSchoolId ?? ""}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setKidSchoolId(v || null);
-                  if (!v) setOpenTimesOnly(false);
-                }}
-              >
-                <option value="">Select school…</option>
-                {data.schools.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.shortName}
-                  </option>
-                ))}
-              </select>
-
-              <div className="kid-levels">
-                <span className="field-label">Kid plays</span>
-                <div className="toggles compact">
-                  <label className={`toggle ${kidVarsity ? "on" : ""}`}>
-                    <input
-                      type="checkbox"
-                      checked={kidVarsity}
-                      onChange={(e) => setKidVarsity(e.target.checked)}
-                      disabled={!kidSchoolId}
-                    />
-                    <span className="toggle__mark">V</span>
-                    Varsity
-                  </label>
-                  <label className={`toggle ${kidJv ? "on" : ""}`}>
-                    <input
-                      type="checkbox"
-                      checked={kidJv}
-                      onChange={(e) => setKidJv(e.target.checked)}
-                      disabled={!kidSchoolId}
-                    />
-                    <span className="toggle__mark dashed">JV</span>
-                    JV
-                  </label>
-                </div>
-              </div>
-
-              <label
-                className={`toggle open-times ${openTimesOnly ? "on" : ""} ${!openTimesReady ? "disabled" : ""}`}
-              >
-                <input
-                  type="checkbox"
-                  checked={openTimesOnly}
-                  disabled={!openTimesReady}
-                  onChange={(e) => setOpenTimesOnly(e.target.checked)}
-                />
-                <span className="toggle__mark open">OT</span>
-                Open times only
-              </label>
-              <p className="panel-help tight">
-                {openTimesOnly && kidSchool
-                  ? `Showing games that don’t conflict with ${kidSchool.shortName}${kidLevels.length === 1 ? ` ${kidLevels[0]}` : ""}.`
-                  : "Hides anything that overlaps your kid’s games."}
-              </p>
-            </section>
-
-            <section className="panel">
-              <div className="panel__row">
-                <h2>Schools</h2>
-                <div className="mini-actions">
-                  <button type="button" onClick={() => setAllLevels(true, true)}>
-                    All
-                  </button>
-                  <button type="button" onClick={() => setAllLevels(true, false)}>
-                    V only
-                  </button>
-                  <button type="button" onClick={() => setAllLevels(false, true)}>
-                    JV only
-                  </button>
-                  <button type="button" onClick={() => setAllLevels(false, false)}>
-                    None
-                  </button>
-                </div>
-              </div>
-              <p className="panel-help tight school-help">
-                Check Varsity and/or JV for each school.
-              </p>
-              <ul className="school-list">
-                {data.schools.map((school) => {
-                  const levels = schoolLevels[school.id] ?? {
-                    varsity: false,
-                    jv: false,
-                  };
-                  const on = isSchoolActive(levels);
-                  const isKid = school.id === kidSchoolId;
-                  return (
-                    <li key={school.id}>
-                      <div
-                        className={`school-card ${on ? "on" : ""} ${isKid ? "kid" : ""}`}
-                        style={
-                          {
-                            "--school": school.primary,
-                            "--school-alt": school.secondary,
-                          } as CSSProperties
-                        }
-                      >
-                        <div className="school-card__top">
-                          <span className="swatch" />
-                          <span className="school-chip__text">
-                            <strong>
-                              {school.shortName}
-                              {isKid ? " · kid" : ""}
-                            </strong>
-                            <small>{school.city}</small>
-                          </span>
-                        </div>
-                        <div className="school-card__levels">
-                          <label
-                            className={`level-check ${levels.varsity ? "on" : ""}`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={levels.varsity}
-                              onChange={(e) =>
-                                setSchoolLevel(
-                                  school.id,
-                                  "varsity",
-                                  e.target.checked
-                                )
-                              }
-                            />
-                            <span>Varsity</span>
-                          </label>
-                          <label
-                            className={`level-check ${levels.jv ? "on" : ""}`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={levels.jv}
-                              onChange={(e) =>
-                                setSchoolLevel(school.id, "jv", e.target.checked)
-                              }
-                            />
-                            <span>JV</span>
-                          </label>
-                        </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-
-            <section className="panel export">
-              <h2>Google Calendar</h2>
-              <p>
-                Download an <code>.ics</code> file, then in Google Calendar
-                choose <strong>Settings → Import &amp; export → Import</strong>.
-              </p>
-              <button
-                type="button"
-                className="btn primary"
-                onClick={exportCalendar}
-              >
-                Download .ics ({events.length} events)
-              </button>
-            </section>
-
-            <p className="meta">
-              {events.length} games shown
-              {openTimesOnly ? " · open times" : ""} · Source {data.source}
-            </p>
-          </aside>
-
-          <main className="calendar-wrap">
-            <Calendar
-              localizer={localizer}
-              events={events}
-              view={view}
-              onView={setView}
-              date={date}
-              onNavigate={setDate}
-              startAccessor="start"
-              endAccessor="end"
-              style={{ height: "100%" }}
-              eventPropGetter={eventPropGetter}
-              onSelectEvent={(event) => setSelected(event as CalendarEvent)}
-              popup
-              components={{
-                agenda: {
-                  event: ({ event }) => (
-                    <MatchupLabel event={event as CalendarEvent} />
-                  ),
-                },
-              }}
-              views={{
-                month: true,
-                week: WeekGamesView,
-                day: DayGamesView,
-                agenda: true,
-              }}
-              tooltipAccessor={(event) => (event as CalendarEvent).title}
+        <div
+          className={`layout ${isMobile ? "layout--mobile" : ""} ${showCalendar ? "show-calendar" : ""} ${showFilters ? "show-filters" : ""}`}
+        >
+          {showFilters ? (
+            <FilterSidebar
+              data={data}
+              schoolLevels={schoolLevels}
+              setSchoolLevel={setSchoolLevel}
+              setAllLevels={setAllLevels}
+              kidSchoolId={kidSchoolId}
+              setKidSchoolId={setKidSchoolId}
+              kidVarsity={kidVarsity}
+              setKidVarsity={setKidVarsity}
+              kidJv={kidJv}
+              setKidJv={setKidJv}
+              openTimesOnly={openTimesOnly}
+              setOpenTimesOnly={setOpenTimesOnly}
+              openTimesReady={openTimesReady}
+              kidSchoolLabel={kidSchoolLabel}
+              eventsCount={events.length}
+              openTimesOnlyActive={openTimesOnly}
+              onExport={exportCalendar}
+              onDone={isMobile ? () => setMobileTab("calendar") : undefined}
+              isMobile={isMobile}
             />
-          </main>
+          ) : null}
+
+          {showCalendar ? (
+            <main className="calendar-wrap">
+              <Calendar
+                localizer={localizer}
+                events={events}
+                view={calendarView}
+                onView={setView}
+                date={date}
+                onNavigate={setDate}
+                startAccessor="start"
+                endAccessor="end"
+                style={{ height: "100%" }}
+                eventPropGetter={eventPropGetter}
+                onSelectEvent={(event) => setSelected(event as CalendarEvent)}
+                popup
+                components={agendaComponents}
+                views={calendarViews}
+                tooltipAccessor={(event) => (event as CalendarEvent).title}
+              />
+            </main>
+          ) : null}
         </div>
+
+        {isMobile ? (
+          <MobileNav
+            active={mobileTab}
+            onChange={setMobileTab}
+            eventsCount={events.length}
+            filtersActive={filtersActive}
+          />
+        ) : null}
 
         {selected && (
           <div

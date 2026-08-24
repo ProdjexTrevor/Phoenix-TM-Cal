@@ -12,7 +12,7 @@ import {
 import type { NavigateAction, ViewProps } from "react-big-calendar";
 import type { CalendarEvent } from "../types";
 import { contrastText } from "../lib/events";
-import { dateKey, schoolsIdleOnDay } from "../lib/conflicts";
+import { dateKey, teamsIdleOnDay } from "../lib/conflicts";
 import { MatchupLabel } from "./MatchupLabel";
 import { useParentWatch } from "./ParentWatchContext";
 
@@ -31,36 +31,37 @@ function IdleTeamsNote({ dayKey }: { dayKey: string }) {
   const watch = useParentWatch();
   if (!watch || watch.watchSchoolIds.length === 0) return null;
 
-  const idle = schoolsIdleOnDay(
+  const idle = teamsIdleOnDay(
     dayKey,
-    watch.watchSchoolIds,
     watch.schools,
-    watch.playingByDate
+    watch.schoolLevels,
+    watch.playingByDate,
+    watch.kidSchoolId,
+    watch.kidLevels
   );
 
   if (idle.length === 0) {
     return (
       <p className="idle-teams">
         <span className="idle-teams__label">Not playing:</span> none — all
-        selected schools have a game
+        selected teams have a game
       </p>
     );
   }
 
-  const kidIdle =
-    watch.kidSchoolId && idle.some((s) => s.id === watch.kidSchoolId);
+  const kidIdle = idle.some((t) => t.isKid);
 
   return (
     <p className={`idle-teams ${kidIdle ? "kid-free" : ""}`}>
       <span className="idle-teams__label">Not playing:</span>{" "}
-      {idle.map((s, i) => (
-        <span key={s.id}>
+      {idle.map((t, i) => (
+        <span key={`${t.schoolId}-${t.level}`}>
           {i > 0 ? ", " : ""}
           <span
-            className={`idle-teams__name ${s.id === watch.kidSchoolId ? "is-kid" : ""}`}
-            style={{ "--school": s.primary } as CSSProperties}
+            className={`idle-teams__name ${t.isKid ? "is-kid" : ""}`}
+            style={{ "--school": t.primary } as CSSProperties}
           >
-            {s.shortName}
+            {t.shortName} {t.level}
           </span>
         </span>
       ))}

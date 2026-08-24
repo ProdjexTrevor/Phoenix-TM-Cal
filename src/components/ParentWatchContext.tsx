@@ -10,7 +10,7 @@ export type ParentWatchState = {
   kidLevels: GameLevel[];
   openTimesOnly: boolean;
   kidBusyByDate: Map<string, BusyBlock[]>;
-  /** schoolIds playing on each date (respecting per-school levels). */
+  /** "schoolId:V" / "schoolId:JV" playing on each date. */
   playingByDate: Map<string, Set<string>>;
 };
 
