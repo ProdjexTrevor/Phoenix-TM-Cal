@@ -349,6 +349,13 @@
   min-height: 720px;
   height: calc(100vh - 11rem);
   animation: rise 0.7s ease-out 0.14s both;
+  display: flex;
+  flex-direction: column;
+}
+
+.calendar-wrap .rbc-calendar {
+  flex: 1;
+  min-height: 0;
 }
 
 .rbc-calendar {
@@ -383,11 +390,19 @@
 }
 
 .rbc-month-view,
-.rbc-time-view,
-.rbc-agenda-view {
+.rbc-time-view {
   border-color: var(--line) !important;
   border-radius: 10px;
   overflow: hidden;
+}
+
+.rbc-agenda-view {
+  border-color: var(--line) !important;
+  border-radius: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .rbc-off-range-bg {
